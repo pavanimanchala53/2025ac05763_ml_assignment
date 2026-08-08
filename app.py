@@ -35,7 +35,7 @@ def find_artifact(filename: str) -> Path | None:
     return None
 
 
-def load_available_models() -> dict[str, object]:
+def load_available_models() -> tuple[dict[str, object], dict[str, str]]:
     model_file_map = {
         "Logistic Regression": "logistic_regression.pkl",
         "Decision Tree": "decision_tree_classifier.pkl",
@@ -46,19 +46,23 @@ def load_available_models() -> dict[str, object]:
     }
 
     loaded_models: dict[str, object] = {}
+    load_errors: dict[str, str] = {}
     for model_name, file_name in model_file_map.items():
         model_path = find_artifact(file_name)
         if model_path is not None:
-            with open(model_path, "rb") as f:
-                loaded_models[model_name] = pickle.load(f)
+            try:
+                with open(model_path, "rb") as f:
+                    loaded_models[model_name] = pickle.load(f)
+            except Exception as exc:
+                load_errors[model_name] = f"{type(exc).__name__}: {exc}"
 
-    return loaded_models
+    return loaded_models, load_errors
 
 
 def run_app() -> None:
     label_path = find_artifact("label_encoder.pkl")
     scaler_path = find_artifact("scaler.pkl")
-    available_models = load_available_models()
+    available_models, model_load_errors = load_available_models()
 
     missing_files = []
     if label_path is None:
@@ -72,15 +76,33 @@ def run_app() -> None:
         return
 
     if not available_models:
-        st.error("No model files found in root folder.")
+        st.error("No usable model files found.")
         st.info("Expected at least one of: model.pkl, logistic_regression.pkl, decision_tree_classifier.pkl, k_nearest_neighbor_classifier.pkl, naive_bayes_classifier.pkl, random_forest_ensemble.pkl")
+        if model_load_errors:
+            st.error("Model load errors:")
+            for model_name, error_text in model_load_errors.items():
+                st.write(f"- {model_name}: {error_text}")
         return
 
-    with open(label_path, "rb") as f:
-        label_encoder = pickle.load(f)
+    if model_load_errors:
+        st.warning("Some model files could not be loaded in this environment. Using only available models.")
+        with st.expander("Show model load details"):
+            for model_name, error_text in model_load_errors.items():
+                st.write(f"- {model_name}: {error_text}")
 
-    with open(scaler_path, "rb") as f:
-        sc = pickle.load(f)
+    try:
+        with open(label_path, "rb") as f:
+            label_encoder = pickle.load(f)
+    except Exception as exc:
+        st.error(f"Failed to load label_encoder.pkl: {type(exc).__name__}: {exc}")
+        return
+
+    try:
+        with open(scaler_path, "rb") as f:
+            sc = pickle.load(f)
+    except Exception as exc:
+        st.error(f"Failed to load scaler.pkl: {type(exc).__name__}: {exc}")
+        return
 
     features = [
         "Age",
@@ -135,6 +157,8 @@ def run_app() -> None:
         ]
         for col in cols:
             df[col] = label_encoder[col].transform(df[col])
+        if hasattr(sc, "feature_names_in_"):
+            df = df.reindex(columns=list(sc.feature_names_in_))
         df_scaled = sc.transform(df)
         return df, df_scaled
 
@@ -202,7 +226,11 @@ def run_app() -> None:
             revenue,
         ]
 
-        status_val, stay_prob, churn_prob = predict_customer_status(input_data, selected_model_name)
+        try:
+            status_val, stay_prob, churn_prob = predict_customer_status(input_data, selected_model_name)
+        except Exception as exc:
+            st.error(f"Prediction failed: {type(exc).__name__}: {exc}")
+            return
 
         status_box.markdown(
             f"""
