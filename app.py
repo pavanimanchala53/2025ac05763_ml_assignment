@@ -190,11 +190,51 @@ def run_app() -> None:
 
         frame = df[FEATURES].copy()
 
+        numeric_cols = [col for col in FEATURES if col not in CATEGORICAL_COLS]
+        for col in numeric_cols:
+            frame[col] = pd.to_numeric(frame[col], errors="coerce")
+            if frame[col].isna().any():
+                median_val = frame[col].median()
+                if pd.isna(median_val):
+                    median_val = 0.0
+                frame[col] = frame[col].fillna(median_val)
+
         for col in CATEGORICAL_COLS:
             if col not in label_encoder:
                 raise KeyError(f"Label encoder for '{col}' not found")
+
+            encoder = label_encoder[col]
+            classes = [str(v) for v in encoder.classes_.tolist()]
+            default_value = classes[0]
+            classes_set = set(classes)
+            classes_lower_map = {v.lower(): v for v in classes}
+
+            cleaned_values: list[str] = []
+            for raw_value in frame[col]:
+                if pd.isna(raw_value):
+                    cleaned_values.append(default_value)
+                    continue
+
+                text = str(raw_value).strip()
+                if text == "" or text.lower() in {"nan", "none", "null"}:
+                    cleaned_values.append(default_value)
+                    continue
+
+                if text in classes_set:
+                    cleaned_values.append(text)
+                    continue
+
+                lowered = text.lower()
+                if lowered in classes_lower_map:
+                    cleaned_values.append(classes_lower_map[lowered])
+                    continue
+
+                cleaned_values.append(text)
+
+            frame[col] = pd.Series(cleaned_values, index=frame.index)
+
             try:
-                frame[col] = label_encoder[col].transform(frame[col])
+                frame[col] = encoder.transform(frame[col])
             except ValueError as exc:
                 raise ValueError(f"Invalid value in column '{col}': {exc}") from exc
 
